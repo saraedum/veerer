@@ -217,6 +217,28 @@ class VeeringTriangulation(Triangulation):
             if i == len(v):
                 raise error('monochromatic vertex {} of colour {}'.format(v, colour_to_string(cols[v[0]])))
 
+    def as_linear_family(self):
+        r"""
+        EXAMPLES::
+
+            sage: from veerer import *
+            sage: vt = VeeringTriangulation("(0,1,2)(~0,~1,~2)", [RED, RED, BLUE])
+            sage: vt.as_linear_family()
+        """
+        require_package('sage', 'as_linear_family')
+
+        from sage.matrix.constructor import matrix
+        from sage.modules.free_module_element import vector
+        from sage.rings.rational_field import QQ
+
+        P = self.train_track_linear_space()
+        lines = []
+        for l in P.minimized_generators():
+            if l.is_line():
+                lines.append(vector(QQ, l.coefficients()))
+        from .linear_family import VeeringTriangulationLinearFamily
+        return VeeringTriangulationLinearFamily(self, matrix(QQ, lines))
+
     def triangle(self, a):
         r"""
         Return a quadruple ``(colour, e0, e1, e2)`` in canonical form for the triangle with half edge ``a``.
@@ -2406,7 +2428,6 @@ class VeeringTriangulation(Triangulation):
                 else:
                     r[e] = f
                     r[ep[e]] = ep[f]
-            from .permutation import perm_cycle_string
             F.append_relabelling(r)
 
             # TODO: remove assertion check
@@ -2902,19 +2923,6 @@ class VeeringTriangulation(Triangulation):
                     insert(x[self._norm(e)] <= 1)
             else:
                 raise ValueError("slope must be HORIZONTAL or VERTICAL")
-
-    def GL2R_span(self, lx, ly):
-        require_package('ppl', 'GL2R_span')
-
-        ne = self.num_edges()
-
-        x = [ppl.Variable(i) for i in range(ne)]
-        y = [ppl.Variable(ne+i) for i in range(ne)]
-
-        gs = ppl.Generator_System()
-        gs.insert(ppl.point())
-
-        return ppl.C_Polyhedron(gs)
 
     def train_track_linear_space(self, slope=VERTICAL):
         r"""
