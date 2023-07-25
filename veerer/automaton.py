@@ -68,7 +68,7 @@ class Automaton(object):
     """
     _name = ''
 
-    def __init__(self, seed=None, verbosity=0):
+    def __init__(self, seed=None, verbosity=0, **extra_kwds):
         # verbosity level
         self._verbosity = 0
 
@@ -87,6 +87,8 @@ class Automaton(object):
         # the flips and relabelling performed along the branch
         self._flips = []
         self._relabellings = []
+
+        self._setup(**extra_kwds)
 
         if seed is not None:
             self.set_seed(seed)
@@ -458,6 +460,9 @@ class Automaton(object):
     ######################
     # DFS implementation #
     ######################
+
+    def _setup(self):
+        pass
 
     def _seed_setup(self, state):
         raise NotImplementedError
@@ -903,19 +908,24 @@ class GeometricAutomatonSubspace(Automaton):
         sage: sum(x.is_geometric() for x in CoreAutomaton(vt))
         54
 
-    Less trivial examples::
+    Some L-shape surfaces::
 
-        sage: vt, s, t = VeeringTriangulations.L_shaped_surface(1, 1, 1, 1)
-        sage: f = VeeringTriangulationLinearFamily(vt, [s, t])
-        sage: GeometricAutomatonSubspace(f)
-        Geometric veering linear constraint automaton with 6 vertices
-
-        sage: vt, s, t = VeeringTriangulations.L_shaped_surface(2, 3, 4, 5, 1, 2)
-        sage: f = VeeringTriangulationLinearFamily(vt, [s, t])
-        sage: GeometricAutomatonSubspace(f)
-
+        sage: for n in range(3, 7):
+        ....:     vt, s, t = VeeringTriangulations.L_shaped_surface(1, n-2, 1, 1)
+        ....:     f = VeeringTriangulationLinearFamily(vt, [s, t])
+        ....:     print('n={}: {}'.format(n, GeometricAutomatonSubspace(f, backend='ppl')))
+        n=3: Geometric veering linear constraint automaton with 6 vertices
+        n=4: Geometric veering linear constraint automaton with 86 vertices
+        n=5: Geometric veering linear constraint automaton with 276 vertices
+        n=6: Geometric veering linear constraint automaton with 800 vertices
     """
     _name = 'geometric veering linear constraint'
+    
+    def _setup(self, backend=None):
+        if backend is None:
+            self._backend = 'ppl'
+        else:
+            self._backend = backend
 
     def _seed_setup(self, state):
         if not isinstance(state, VeeringTriangulationLinearFamily) or not state.is_geometric():
@@ -928,7 +938,7 @@ class GeometricAutomatonSubspace(Automaton):
         r"""
         Return the list of forward flippable edges from ``state``
         """
-        return state.geometric_flips()
+        return state.geometric_flips(self._backend)
 
     def _flip(self, flip_data):
         flip_back_data = tuple((e, self._state.colour(e)) for e, _ in flip_data)

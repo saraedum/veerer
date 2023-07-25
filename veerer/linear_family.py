@@ -29,6 +29,7 @@ import itertools
 from .env import sage, ppl
 from .constants import VERTICAL, HORIZONTAL, BLUE, RED
 from .permutation import perm_cycle_string, perm_cycles, perm_check, perm_conjugate, perm_on_list
+from .linear_expression import LinearExpressions, ConstraintSystem, polyhedron, polyhedron_add_constraints, polyhedron_dimension, polyhedron_to_hashable
 
 
 from .veering_triangulation import VeeringTriangulation
@@ -195,6 +196,67 @@ class VeeringTriangulationLinearFamily(VeeringTriangulation):
         if check:
             self._check(ValueError)
 
+    def _horizontal_subspace(self):
+        mat = copy(self._subspace)
+        ne = self.num_edges()
+        ep = self._ep
+        for j in range(ne):
+            if ep[j] < j:
+                raise ValueError('not in standard form')
+            if self._colouring[j] == BLUE:
+                for i in range(mat.nrows()):
+                    mat[i, j] *= -1
+        return mat
+
+    def ambient_dimension(self):
+        return self._subspace.nrows()
+
+    def conjugate(self):
+        raise NotImplementedError
+
+    def rotate(self):
+        r"""
+        Conjugate this family.
+
+        EXAMPLES::
+
+            sage: from veerer import *
+
+            sage: fp = "(0,1,2)(~0,~4,~2)(3,4,5)(~3,~1,~5)"
+            sage: cols = "BRRBRR"
+            sage: f = VeeringTriangulation(fp, cols).as_linear_family(mutable=True)
+            sage: f.rotate()
+            sage: f
+            VeeringTriangulationLinearFamily("(0,1,2)(3,4,5)(~5,~3,~1)(~4,~2,~0)", "RBBRBB", [(1, 0, -1, 0, 0, 0), (0, 1, 1, 0, 1, 1), (0, 0, 0, 1, 0, -1)])
+
+ 
+            sage: fp = "(0,12,~11)(1,13,~12)(2,14,~13)(3,15,~14)(4,17,~16)(5,~10,11)(6,~3,~17)(7,~2,~6)(8,~5,~7)(9,~0,~8)(10,~4,~9)(16,~15,~1)"
+            sage: cols = "RRRRRRBBBBBBBBBBBB"
+            sage: f = VeeringTriangulation(fp, cols).as_linear_family(mutable=True)
+            sage: f.rotate()
+            sage: f
+            VeeringTriangulationLinearFamily("(0,12,~11)(1,13,~12)(2,14,~13)(3,15,~14)(4,17,~16)(5,~10,11)(6,~3,~17)(7,~2,~6)(8,~5,~7)(9,~0,~8)(10,~4,~9)(16,~15,~1)", "BBBBBBRRRRRRRRRRRR", [(1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0), (0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 1, 2, 2, 1, 1, 1, 0, 0), (0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0), (0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1, -1, -1), (0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0), (0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)])
+        """
+        if not self._mutable:
+            raise ValueError('immutable veering triangulation family; use a mutable copy instead')
+
+        subspace = self._horizontal_subspace()
+        subspace.echelonize()
+        VeeringTriangulation.rotate(self)
+        self._subspace = subspace
+
+        # TODO: remove check
+        self._check()
+
+    def _set_subspace_constraints(self, insert, x, slope):
+        ambient_dim = self._subspace.ncols()
+        if slope == VERTICAL:
+            subspace = self._subspace
+        elif slope == HORIZONTAL:
+            subspace = self._horizontal_subspace()
+        for row in subspace.right_kernel_matrix():
+            insert(sum(row[i] * x[i] for i in range(ambient_dim)) == 0)
+
     def copy(self, mutable=None):
         r"""
         Return a copy of this linear family.
@@ -349,18 +411,32 @@ class VeeringTriangulationLinearFamily(VeeringTriangulation):
         c = subspace_cmp(self._subspace, other._subspace)
         return rich_to_bool(op, c)
 
-    def train_track_polytope(self, slope=VERTICAL, low_bound=0):
+    def train_track_polytope(self, slope=VERTICAL, low_bound=0, backend='ppl'):
         r"""
         Return the polytope of non-negative elements in the subspace.
-        """
-        if slope == HORIZONTAL:
-            raise NotImplementedError
 
-        base_ring = self.base_ring()
-        m = self.num_edges()
-        pos = Polyhedron(base_ring=base_ring, ieqs=[(0,) * i + (1,) + (0,) * (m - i) for i in range(1, m + 1)])
-        subspace = Polyhedron(base_ring=base_ring, lines=self._subspace.rows())
-        return subspace.intersection(pos)
+        EXAMPLES::
+
+            sage: from veerer import *
+            sage: vt, s, t = VeeringTriangulations.L_shaped_surface(1, 3, 1, 1)
+            sage: f = VeeringTriangulationLinearFamily(vt, [s, t])
+            sage: f.train_track_polytope(VERTICAL)
+            A 2-dimensional polyhedron in QQ^7 defined as the convex hull of 1 point, 2 rays
+            sage: f.train_track_polytope(HORIZONTAL)
+            A 2-dimensional polyhedron in QQ^7 defined as the convex hull of 1 point, 2 rays
+
+            sage: f.train_track_polytope(VERTICAL, backend='ppl').generators()
+            Generator_System {point(0/1, 0/1, 0/1, 0/1, 0/1, 0/1, 0/1), ray(0, 1, 3, 3, 1, 1, 0), ray(1, 0, 0, 1, 1, 1, 1)}
+            sage: f.train_track_polytope(HORIZONTAL, backend='ppl').generators()
+            Generator_System {point(0/1, 0/1, 0/1, 0/1, 0/1, 0/1, 0/1), ray(1, 0, 0, 1, 1, 1, 1), ray(3, 1, 3, 0, 2, 2, 3)}
+        """
+        ne = self.num_edges()
+        L = LinearExpressions(self.base_ring())
+        cs = ConstraintSystem()
+        for i in range(ne):
+            cs.insert(L.variable(i) >= low_bound)
+        self._set_subspace_constraints(cs.insert, [L.variable(i) for i in range(ne)], slope)
+        return polyhedron(cs, backend)
 
     def dimension(self):
         r"""
@@ -504,19 +580,7 @@ class VeeringTriangulationLinearFamily(VeeringTriangulation):
         VeeringTriangulation.flip_back(self, e, col, Gx=self._subspace, check=check)
         self._subspace.echelonize()
 
-    def _conjugate_subspace(self):
-        mat = copy(self._subspace)
-        ne = self.num_edges()
-        ep = self._ep
-        for j in range(ne):
-            if ep[j] < j:
-                raise ValueError('not in standard form')
-            if self._colouring[j] == BLUE:
-                for i in range(mat.nrows()):
-                    mat[i, j] *= -1
-        return mat
-
-    def geometric_polytope(self, x_low_bound=0, y_low_bound=0, hw_bound=0):
+    def geometric_polytope(self, x_low_bound=0, y_low_bound=0, hw_bound=0, backend='sage'):
         r"""
         Return the geometric polytope.
 
@@ -526,24 +590,45 @@ class VeeringTriangulationLinearFamily(VeeringTriangulation):
 
             sage: T = VeeringTriangulation("(0,1,2)(~0,~1,~2)", "RRB")
             sage: T.geometric_polytope()
-            sage: T.as_linear_family().geometric_polytope()
+            A 4-dimensional polyhedron in QQ^6 defined as the convex hull of 1 point, 7 rays
+            sage: T.as_linear_family().geometric_polytope(backend='ppl')
+            A 4-dimensional polyhedron in QQ^6 defined as the convex hull of 1 point, 7 rays
+            sage: T.as_linear_family().geometric_polytope(backend='sage')
+            A 4-dimensional polyhedron in QQ^6 defined as the convex hull of 1 vertex and 7 rays
+
+        An example in genus 2 involving a linear constraint::
+
+            sage: vt, s, t = VeeringTriangulations.L_shaped_surface(1, 1, 1, 1)
+            sage: f = VeeringTriangulationLinearFamily(vt, [s, t])
+            sage: PG = f.geometric_polytope(backend='ppl')
+            sage: PG
+            A 4-dimensional polyhedron in QQ^14 defined as the convex hull of 1 point, 7 rays
+            sage: for r in PG.generators():
+            ....:     if r.is_ray():
+            ....:         print(r)
+            ray(0, 1, 1, 1, 1, 1, 0, 2, 2, 2, 0, 0, 0, 2)
+            ray(0, 1, 1, 1, 1, 1, 0, 2, 0, 0, 2, 2, 2, 2)
+            ray(0, 2, 2, 2, 2, 2, 0, 1, 1, 1, 0, 0, 0, 1)
+            ray(0, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1)
+            ray(2, 0, 0, 2, 2, 2, 2, 1, 1, 1, 0, 0, 0, 1)
+            ray(1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1)
+            ray(1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1)
         """
-        dim = self._subspace.ncols()
-        gens = [tuple(r) + (0,) * dim for r in self._subspace]
-        gens.extend((0,) * dim + tuple(r) for r in self._conjugate_subspace())
-        subspace = Polyhedron(lines=gens)
+        ne = self._subspace.ncols()
+        L = LinearExpressions(self.base_ring())
+        x = [L.variable(i) for i in range(ne)]
+        y = [L.variable(ne + i) for i in range(ne)]
+        cs = ConstraintSystem()
+        for i in range(ne):
+            cs.insert(x[i] >= x_low_bound)
+        for i in range(ne):
+            cs.insert(y[i] >= y_low_bound)
+        self._set_subspace_constraints(cs.insert, x, VERTICAL)
+        self._set_subspace_constraints(cs.insert, y, HORIZONTAL)
+        self._set_geometric_constraints(cs.insert, x, y, hw_bound=hw_bound)
+        return polyhedron(cs, backend)
 
-        ieqs = []
-        eqns = []
-        for g in VeeringTriangulation.geometric_polytope(self).constraints():
-            l = (g.inhomogeneous_term(),) + g.coefficients()
-            if g.is_equality():
-                eqns.append(l)
-            elif g.is_inequality():
-                ieqs.append(l)
-        return subspace.intersection(Polyhedron(ieqs=ieqs, eqns=eqns))
-
-    def geometric_flips(self):
+    def geometric_flips(self, backend='ppl'):
         r"""
         Return the list of geometric flips.
 
@@ -562,7 +647,9 @@ class VeeringTriangulationLinearFamily(VeeringTriangulation):
             sage: from veerer import *
             sage: T, s, t = VeeringTriangulations.L_shaped_surface(1, 1, 1, 1)
             sage: f = VeeringTriangulationLinearFamily(T, [s, t])
-            sage: sorted(T.geometric_flips())
+            sage: sorted(T.geometric_flips(backend='ppl'))
+            [[(3, 1), (4, 1), (5, 1)], [(3, 2), (4, 2), (5, 2)]]
+            sage: sorted(T.geometric_flips(backend='sage'))
             [[(3, 1), (4, 1), (5, 1)], [(3, 2), (4, 2), (5, 2)]]
 
         To be compared with the geometric flips in the ambient stratum::
@@ -574,7 +661,9 @@ class VeeringTriangulationLinearFamily(VeeringTriangulation):
 
             sage: T, s, t = VeeringTriangulations.L_shaped_surface(2, 3, 5, 2, 1, 1)
             sage: f = VeeringTriangulationLinearFamily(T, [s, t])
-            sage: sorted(T.geometric_flips())
+            sage: sorted(f.geometric_flips(backend='ppl'))
+            [[(4, 2)], [(5, 1)], [(5, 2)]]
+            sage: sorted(f.geometric_flips(backend='sage'))
             [[(4, 2)], [(5, 1)], [(5, 2)]]
 
         TESTS::
@@ -588,52 +677,42 @@ class VeeringTriangulationLinearFamily(VeeringTriangulation):
             sage: sorted(vt.as_linear_family().geometric_flips())
             [[(2, 1)], [(2, 2)], [(4, 1), (8, 1)], [(4, 2), (8, 2)]]
         """
-        ambient_dim = self._subspace.ncols()
         dim = self._subspace.nrows()
-        P = self.geometric_polytope()
-        if P.dimension() != 2 * dim:
+        ne = ambient_dim = self._subspace.ncols()
+        L = LinearExpressions(self.base_ring())
+        x = [L.variable(e) for e in range(ne)]
+        y = [L.variable(ne + e) for e in range(ne)]
+        P = self.geometric_polytope(backend=backend)
+        if polyhedron_dimension(P, backend) != 2 * dim:
             raise ValueError('not geometric P.dimension() = {} while 2 * dim = {}'.format(P.dimension(), 2 * dim))
-
-        eqns = P.equations_list()
-        ieqs = P.inequalities_list()
 
         delaunay_facets = collections.defaultdict(list)
         for e in self.forward_flippable_edges():
             a, b, c, d = self.square_about_edge(e)
 
-            hyperplane = [0] * (1 + 2 * ambient_dim)
-            hyperplane[1 + self._norm(e)] = 1
-            hyperplane[1 + ambient_dim + self._norm(a)] = -1
-            hyperplane[1 + ambient_dim + self._norm(d)] = -1
-            Q = Polyhedron(base_ring=P.base_ring(),
-                           eqns=eqns + [hyperplane],
-                           ieqs=ieqs)
-            if Q.dimension() == 2 * dim - 1:
-                delaunay_facets[Q].append(e)
+            constraint = x[self._norm(e)] == y[self._norm(a)] + y[self._norm(d)]
+            Q = polyhedron_add_constraints(P, constraint, backend)
+            facet_dim = polyhedron_dimension(Q, backend)
+            assert facet_dim < 2 * dim
+            if facet_dim == 2*dim - 1:
+                hQ = polyhedron_to_hashable(Q, backend)
+                if hQ not in delaunay_facets:
+                    delaunay_facets[hQ] = [Q, []]
+                delaunay_facets[hQ][1].append(e)
 
         neighbours = []
-        for Q, edges in delaunay_facets.items():
-            eqns = Q.equations_list()
-            ieqs = Q.inequalities_list()
+        for Q, edges in delaunay_facets.values():
             for cols in itertools.product([BLUE, RED], repeat=len(edges)):
                 Z = list(zip(edges, cols))
-                half_spaces = []
+                cs = ConstraintSystem()
                 for e, col in Z:
                     a, b, c, d = self.square_about_edge(e)
-                    half_space = [0] * (1 + 2 * ambient_dim)
                     if col == RED:
-                        # x[a] <= x[d]
-                        half_space[1 + self._norm(d)] = +1
-                        half_space[1 + self._norm(a)] = -1
+                        cs.insert(x[self._norm(a)] <= x[self._norm(d)])
                     else:
-                        # x[a] >= x[d]
-                        half_space[1 + self._norm(d)] = -1
-                        half_space[1 + self._norm(a)] = +1
-                    half_spaces.append(half_space)
-                S = Polyhedron(base_ring=Q.base_ring(),
-                               eqns=eqns,
-                               ieqs=ieqs + half_spaces)
-                if S.dimension() == 2 * dim - 1:
+                        cs.insert(x[self._norm(a)] >= x[self._norm(d)])
+                S = polyhedron_add_constraints(Q, cs, backend)
+                if polyhedron_dimension(S, backend) == 2 * dim - 1:
                     neighbours.append(Z)
 
         return neighbours
