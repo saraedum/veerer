@@ -287,6 +287,18 @@ class ConstraintSystem:
                 raise ValueError('invalid constraint {}'.format(constraint))
         return ieqs, eqns
 
+    def is_linear_subspace(self):
+        return all(constraint._op == op_EQ and constraint._expression._inhomogeneous_term.is_zero() for constraint in self)
+
+    def linear_generators_matrix(self, dim=None):
+        from sage.matrix.constructor import matrix
+        if dim is None:
+            dim = self._dim
+        if not self.is_linear_subspace():
+            raise ValueError('not a linear subspace')
+        mat = matrix([constraint._expression.coefficients(dim)[1:] for constraint in self])
+        return mat.right_kernel_matrix()
+
 
 class LinearExpressions(Parent):
     r"""
