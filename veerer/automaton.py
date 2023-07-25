@@ -603,7 +603,7 @@ class Automaton(object):
             if is_target_valid: # = T is a valid vertex
                 r, _ = T.best_relabelling()
                 rinv = perm_invert(r)
-                T.relabel(r)
+                T.relabel(r, check=False)
                 new_state = T.copy(mutable=False)
                 new_state.set_immutable()
                 graph[state_branch[-1]].append((new_state, new_flip))
@@ -635,7 +635,7 @@ class Automaton(object):
                     if self._verbosity >= 2:
                         print('[automaton] known vertex')
                         sys.stdout.flush()
-                    T.relabel(rinv)
+                    T.relabel(rinv, check=False)
 
             else:  # = T is not a valid vertex
                 if self._verbosity >= 2:
@@ -652,7 +652,7 @@ class Automaton(object):
 
             while flips and not flip_branch[-1]:
                 rinv = relabellings.pop()
-                T.relabel(rinv)
+                T.relabel(rinv, check=False)
                 flip_back_data = flips.pop()
                 self._flip_back(flip_back_data)
                 state_branch.pop()
@@ -845,6 +845,10 @@ class GeometricAutomaton(Automaton):
         sage: GeometricAutomaton(vt)
         Geometric veering automaton with 54 vertices
 
+        sage: from surface_dynamics import AbelianStratum
+        sage: for comp in AbelianStratum(4).components():
+        ....:     print(comp, GeometricAutomaton(VeeringTriangulation.from_stratum(comp)))
+
     One can check that the cardinality is indeed correct::
 
         sage: sum(x.is_geometric() for x in CoreAutomaton(vt))
@@ -869,6 +873,8 @@ class GeometricAutomaton(Automaton):
         flip_back_data = tuple((e, self._state.colour(e)) for e, _ in flip_data)
         for e, col in flip_data:
             self._state.flip(e, col)
+        if env.CHECK and not self._state.is_geometric():
+            raise RuntimeError('that was indeed possible!')
         return True, flip_back_data
 
     def _flip_back(self, flip_back_data):
@@ -896,6 +902,18 @@ class GeometricAutomatonSubspace(Automaton):
 
         sage: sum(x.is_geometric() for x in CoreAutomaton(vt))
         54
+
+    Less trivial examples::
+
+        sage: vt, s, t = VeeringTriangulations.L_shaped_surface(1, 1, 1, 1)
+        sage: f = VeeringTriangulationLinearFamily(vt, [s, t])
+        sage: GeometricAutomatonSubspace(f)
+        Geometric veering linear constraint automaton with 6 vertices
+
+        sage: vt, s, t = VeeringTriangulations.L_shaped_surface(2, 3, 4, 5, 1, 2)
+        sage: f = VeeringTriangulationLinearFamily(vt, [s, t])
+        sage: GeometricAutomatonSubspace(f)
+
     """
     _name = 'geometric veering linear constraint'
 
@@ -916,6 +934,10 @@ class GeometricAutomatonSubspace(Automaton):
         flip_back_data = tuple((e, self._state.colour(e)) for e, _ in flip_data)
         for e, col in flip_data:
             self._state.flip(e, col)
+        if env.CHECK:
+            self._state._check(RuntimeError)
+            if not self._state.is_geometric():
+                raise RuntimeError
         return True, flip_back_data
 
     def _flip_back(self, flip_back_data):

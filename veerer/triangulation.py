@@ -908,7 +908,7 @@ class Triangulation(object):
             else:
                 m[e] = (m[a] if a < A else -m[A]) + (m[d] if d < D else -m[D])
 
-    def relabel_homological_action(self, p, m, twist=False):
+    def relabel_homological_action(self, p, m, twist=False, check=True):
         r"""
         Acts on the homological vectors ``m`` by the relabeling permutation ``p``.
 
@@ -946,7 +946,7 @@ class Triangulation(object):
         """
         n = self._n
         ne = self.num_edges()
-        if not perm_check(p, n):
+        if check and not perm_check(p, n):
             p = perm_init(p, self._n, self._ep)
             if not perm_check(p, n):
                 raise ValueError('invalid relabeling permutation')
@@ -1159,10 +1159,7 @@ class Triangulation(object):
         vp[e] = E_vp
         vp[E] = e_vp
 
-        # TODO: remove check
-        self._check()
-
-    def relabel(self, p):
+    def relabel(self, p, check=True):
         r"""
         Relabel this triangulation inplace according to the permutation ``p``.
 
@@ -1200,7 +1197,7 @@ class Triangulation(object):
             raise ValueError('immutable triangulation; use a mutable copy instead')
 
         n = self._n
-        if not perm_check(p, n):
+        if check and not perm_check(p, n):
             # if the input is not a valid permutation, we assume that half-edges
             # are not separated
             p = perm_init(p, n, self._ep)
@@ -1210,7 +1207,6 @@ class Triangulation(object):
         self._vp = perm_conjugate(self._vp, p)
         self._ep = perm_conjugate(self._ep, p)
         self._fp = perm_conjugate(self._fp, p)
-
 
     def flip(self, e):
         r"""
@@ -1551,30 +1547,11 @@ class Triangulation(object):
         #   vp, ep, fp and vp[ep[fp]]
         n = self._n
 
-        lv = [-1] * n
-        for c in perm_cycles(self._vp):
-            m = len(c)
-            for i in c:
-                lv[i] = m
-
-        le = [-1] * n
-        for c in perm_cycles(self._ep):
-            m = len(c)
-            for i in c:
-                le[i] = m
-
-        lf = [-1] * n
-        for c in perm_cycles(self._fp):
-            m = len(c)
-            for i in c:
-                lf[i] = m
-
-        lvef = [-1] * n
+        lv = perm_cycles_lengths(self._vp, n)
+        le = perm_cycles_lengths(self._ep, n)
+        lf = perm_cycles_lengths(self._fp, n)
         vef = perm_compose(perm_compose(self._fp, self._ep), self._vp)
-        for c in perm_cycles(vef):
-            m = len(c)
-            for i in c:
-                lvef[i] = m
+        lvef = perm_cycles_lengths(vef, n)
 
         d = {}
         for i in range(n):
@@ -1584,7 +1561,7 @@ class Triangulation(object):
             else:
                 d[s] = [i]
         m = min(len(x) for x in d.values())
-        candidates = [s for s,v in d.items() if len(v) == m]
+        candidates = [s for s, v in d.items() if len(v) == m]
         winner = min(candidates)
 
         return d[winner]
@@ -1726,7 +1703,7 @@ class Triangulation(object):
             raise ValueError('immutable triangulation; use a mutable copy instead')
 
         r, _ = self.best_relabelling()
-        self.relabel(r)
+        self.relabel(r, check=False)
 
     def iso_sig(self):
         r"""

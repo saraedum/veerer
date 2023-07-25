@@ -1027,7 +1027,7 @@ class VeeringTriangulation(Triangulation):
         colouring_cov = self._colouring * 2
         # TODO: remove the check argument
         vt = self.from_face_edge_perms(colouring_cov, array('l', fp_cov), array('l', ep_cov), mutable=True, check=True)
-        vt.relabel(vt._relabelling_from(0))
+        vt.relabel(vt._relabelling_from(0), check=False)
         if not mutable:
             vt.set_immutable()
         return vt
@@ -1396,7 +1396,7 @@ class VeeringTriangulation(Triangulation):
             if not perm_check(p, n):
                 raise ValueError('invalid relabelling permutation')
 
-        Triangulation.relabel(self, p)
+        Triangulation.relabel(self, p, check=False)
         perm_on_list(p, self._colouring)
 
     def _automorphism_good_starts(self, has_purple=None, has_green=None):
@@ -1612,6 +1612,7 @@ class VeeringTriangulation(Triangulation):
         best = None
         if all:
             relabellings = []
+
         for start_edge in self._automorphism_good_starts():
             relabelling = self._relabelling_from(start_edge)
 
@@ -2518,7 +2519,6 @@ class VeeringTriangulation(Triangulation):
         EXAMPLES::
 
             sage: from veerer import VeeringTriangulation, HORIZONTAL
-            sage: import ppl
             sage: vt = VeeringTriangulation("(0,1,2)(3,4,5)(6,7,8)(~8,~0,~7)(~6,~1,~5)(~4,~2,~3)", "RRBRRBRRB")
             sage: vt.switch_matrix()
             [ 1 -1  1  0  0  0  0  0  0]
@@ -2535,7 +2535,6 @@ class VeeringTriangulation(Triangulation):
             [ 0  1  0  0  0  1 -1  0  0]
             [ 0  0  1 -1  1  0  0  0  0]
         """
-        require_package('ppl', 'switch_matrix')
         require_package('sage', 'switch_matrix')
 
         from sage.matrix.constructor import matrix
@@ -2928,7 +2927,6 @@ class VeeringTriangulation(Triangulation):
             gs.insert(ppl.line(g))
         return gs
 
-    # TODO: ppl only allows *rational* polytope which is not enough for our purpose
     def geometric_polytope(self, Lx=None, Gx=None, x_low_bound=0, y_low_bound=0, hw_bound=0):
         r"""
         Return the geometric polytope of this veering triangulation.
@@ -2975,9 +2973,10 @@ class VeeringTriangulation(Triangulation):
         x = [ppl.Variable(e) for e in range(ne)]
         y = [ppl.Variable(ne+e) for e in range(ne)]
 
+
         if Lx is None and Gx is None:
-            P = self.train_track_polytope(VERTICAL, low_bound=x_low_bound)
-            P.concatenate_assign(self.train_track_polytope(HORIZONTAL, low_bound=y_low_bound))
+            P = VeeringTriangulation.train_track_polytope(self, VERTICAL, low_bound=x_low_bound)
+            P.concatenate_assign(VeeringTriangulation.train_track_polytope(self, HORIZONTAL, low_bound=y_low_bound))
             self._set_geometric_constraints(P.add_constraint, x, y, hw_bound=hw_bound)
             return P
 
@@ -3642,7 +3641,8 @@ class VeeringTriangulation(Triangulation):
         else:
             dim = self.stratum_dimension()
 
-        P = self.geometric_polytope(Lx=Lx, Gx=Gx)
+        # NOTE: geometric_polytope might be redefined in subclasses
+        P = VeeringTriangulation.geometric_polytope(self, Lx=Lx, Gx=Gx)
         if P.affine_dimension() != 2 * dim:
             raise ValueError('not geometric or invalid constraints')
 
@@ -3654,19 +3654,23 @@ class VeeringTriangulation(Triangulation):
 
             Q = ppl.C_Polyhedron(P)
             Q.add_constraint(x[self._norm(e)] == y[self._norm(a)] + y[self._norm(d)])
-            if Q.affine_dimension() == 2*dim - 1:
+            facet_dim = Q.affine_dimension()
+            assert facet_dim < 2 * dim
+            if facet_dim == 2*dim - 1:
                 hQ = ppl_cone_to_hashable(Q)
                 if hQ not in delaunay_facets:
                     delaunay_facets[hQ] = [Q, []]
                 delaunay_facets[hQ][1].append(e)
 
         # computing colouring of the new triangulations
+        # NOTE: is it really enough? We need the neighbour to also be geometric
+        # (and not 2*dim - 1 dimensional)
         neighbours = []
         for Q, edges in delaunay_facets.values():
             for cols in product([BLUE, RED], repeat=len(edges)):
                 S = ppl.C_Polyhedron(Q)
                 Z = list(zip(edges, cols))
-                for e,col in Z:
+                for e, col in Z:
                     a,b,c,d = self.square_about_edge(e)
                     if col == RED:
                         S.add_constraint(x[self._norm(a)] <= x[self._norm(d)])
