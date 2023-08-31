@@ -1,4 +1,12 @@
 import sage.all
+import compress_pickle
+
+def dumps(*args, **kwargs):
+    return compress_pickle.dumps(*args, compression="bz2", **kwargs)
+
+def loads(*args, **kwargs):
+    return compress_pickle.loads(*args, compression="bz2", **kwargs)
+
 r"""
 Tiings for the computation of the geometric veering triangulations
 of H(4)^hyp
@@ -18,12 +26,13 @@ Twice sequentially and then 3 and 4 processes
 
    $ sage -python veering_triangulations_multiprocessing.py s 3 4
 """
-def geometric_neighbors(vt):
+def geometric_neighbors(vtd):
     r"""
     Return the pair ``(vt, list_of_neighbors)`` that consists of the input
     triangulation ``vt`` together with the list ``list_of_neighbors`` of
     neighbors in the flip graph.
     """
+    vt = loads(vtd)
     ans = []
     for edges, col in vt.geometric_flips(backend='ppl'):
         new_vt = vt.copy(mutable=True)
@@ -31,8 +40,8 @@ def geometric_neighbors(vt):
             new_vt.flip(e, col, check=False)
         new_vt.set_canonical_labels()
         new_vt.set_immutable()
-        ans.append(new_vt)
-    return vt, ans
+        ans.append(dumps(new_vt))
+    return vtd, ans
 
 
 def geometric_neighbors_batched(vts):
@@ -46,6 +55,7 @@ def run_parallel(vt0):
     NOTE: the maxtaskperchild argument to Pool is randomly set to 128 so
     that workers are restarted to avoid leaking
     """
+    vt0 = dumps(vt0)
     graph = {vt0: []}
 
     from dask.distributed import as_completed
@@ -97,12 +107,12 @@ if __name__ == '__main__':
     # For a larger computation, replace the line below with one of
     # stratum_component = AbelianStratum(4).odd_component()
     # stratum_component = AbelianStratum(2, 2).hyperelliptic_component()
-    # stratum_component = AbelianStratum(4).hyperelliptic_component()
+    stratum_component = AbelianStratum(4).hyperelliptic_component()
     # stratum_component = AbelianStratum(3, 1).unique_component()
     # stratum_component = AbelianStratum(2, 2).hyperelliptic_component()
     # stratum_component = AbelianStratum(2, 2).odd_component()
     # stratum_component = AbelianStratum(6).hyperelliptic_component()
-    stratum_component = AbelianStratum(6).odd_component()
+    # stratum_component = AbelianStratum(6).odd_component()
 
     import os
     print('Computing geometric veering triangulations in %s' % stratum_component)
