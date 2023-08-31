@@ -59,7 +59,7 @@ def run_parallel(roots, pool, graph, threads):
         while processing or unprocessed:
             print(f"processing {len(processing)}, unprocessed {len(unprocessed)}, seen {len(seen)}")
 
-            while unprocessed and len(processing) < 64 * threads:
+            while unprocessed and len(processing) < 8 * threads:
                 key, vt = unprocessed.pop()
                 neighbors = pool.submit(geometric_neighbors, vt)
                 processing[neighbors] = (geometric_neighbors, (vt, key))
@@ -68,7 +68,6 @@ def run_parallel(roots, pool, graph, threads):
                 import concurrent.futures
 
                 completed, _ = dask.distributed.wait(list(processing.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
-                print(f"completed {len(completed)}")
 
                 for task in completed:
                     kind, args = processing.pop(task)
@@ -78,7 +77,7 @@ def run_parallel(roots, pool, graph, threads):
                         vt, key = args
                         vts = task
 
-                        processing[pool.submit(md5s, vts, workers=workers, priority=2)] = (md5s, (vt, key, vts))
+                        processing[pool.submit(md5s, vts, workers=workers)] = (md5s, (vt, key, vts))
 
                     if kind == md5s:
                         vt, key, vts = args
@@ -92,7 +91,7 @@ def run_parallel(roots, pool, graph, threads):
 
                         for i, key in enumerate(keys):
                             if key not in seen:
-                                unprocessed.append((key, pool.submit(select, vts, i, workers=workers, priority=1)))
+                                unprocessed.append((key, pool.submit(select, vts, i, workers=workers)))
                                 seen.add(key)
 
                         progress.update(progress_bar, total=len(seen))
@@ -106,7 +105,7 @@ def main():
     import os
     threads = os.cpu_count()
 
-    pool = dask.distributed.Client(n_workers=threads, direct_to_workers=True)
+    pool = dask.distributed.Client(n_workers=threads)
     # pool = dask.distributed.Client("localhost:8786", direct_to_workers=False)
     # preload="dask_preload", serializers=["pickle"], deserializers=["pickle"], nworkers=8, nthreads=1)
 
