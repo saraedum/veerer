@@ -104,7 +104,7 @@ def run_parallel(root, pool, threads, graph):
                 continue
 
             # We want there to always be 2 * threads jobs in the queue.
-            target = max(1, 3 * threads - (submitted_jobs - finished_jobs))
+            target = min(len(tasks), max(1, 3 * threads - (submitted_jobs - finished_jobs)))
 
             batches = [tasks[offset::target] for offset in range(target)]
 
