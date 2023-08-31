@@ -48,15 +48,15 @@ def geometric_neighbors_batched(vts):
     return [geometric_neighbors(vt) for vt in vts]
 
 
-def run_parallel(vt0):
+def run_parallel(root, pool, graph):
     r"""
     Compute the graph using a multiprocessing.Pool
 
     NOTE: the maxtaskperchild argument to Pool is randomly set to 128 so
     that workers are restarted to avoid leaking
     """
-    vt0 = dumps(vt0)
-    graph = {vt0: []}
+    vt0 = dumps(root)
+    graph[vt0] = []
 
     from dask.distributed import as_completed
     jobs = as_completed([pool.submit(geometric_neighbors_batched, [vt0])], with_results=True)
@@ -86,10 +86,8 @@ def run_parallel(vt0):
             for batch in batches:
                 jobs.add(pool.submit(geometric_neighbors_batched, batch))
 
-        return graph
 
-
-if __name__ == '__main__':
+def main():
     import dask.distributed
     cores = 24
     pool = dask.distributed.Client(n_workers=2*cores)
@@ -122,7 +120,12 @@ if __name__ == '__main__':
 
     import datetime
     t0 = datetime.datetime.now()
-    graph = run_parallel(vt0)
+    graph = {}
+    run_parallel(root=vt0, pool=pool, graph=graph)
     t1 = datetime.datetime.now()
     elapsed = t1 - t0
     print(f'{len(graph)} triangulations computed in {elapsed * 2 * cores} CPU time')
+
+
+if __name__ == '__main__':
+    main()
