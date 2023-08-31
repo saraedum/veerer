@@ -152,7 +152,7 @@ def main():
     nodes = run_parallel(root=vt0, pool=pool, threads=threads, graph=graph)
     t1 = datetime.datetime.now()
     elapsed = t1 - t0
-    print(f'{nodes} triangulations computed in {elapsed * threads} CPU time')
+    print(f'{nodes} triangulations computed in {elapsed * threads} CPU time; {elapsed} wall time')
 
 
 if __name__ == '__main__':
