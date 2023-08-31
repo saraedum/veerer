@@ -48,7 +48,7 @@ def geometric_neighbors_batched(vts):
     return [geometric_neighbors(vt) for vt in vts]
 
 
-def run_parallel(root, pool, graph):
+def run_parallel(root, pool, threads, graph):
     r"""
     Compute the graph using a multiprocessing.Pool
 
@@ -70,19 +70,24 @@ def run_parallel(root, pool, graph):
     assert is_new(vt0)
 
     from dask.distributed import as_completed
-    jobs = as_completed([pool.submit(geometric_neighbors_batched, [vt0])], with_results=True)
+    jobs = as_completed([pool.submit(geometric_neighbors_batched, [vt0])])
 
     submitted_jobs = 1
+    finished_jobs = 0
 
     from rich.progress import Progress, TextColumn, TimeElapsedColumn, BarColumn, MofNCompleteColumn
     with Progress(TextColumn("{task.description}"), BarColumn(), TimeElapsedColumn(), MofNCompleteColumn(), transient=True, refresh_per_second=1) as progress:
         task_exploring = progress.add_task("exploring graph", total=len(seen))
         task_jobs = progress.add_task("processing batched jobs", total=submitted_jobs)
 
-        for completed in jobs:
-            _, results = completed
+        while not jobs.is_empty():
             tasks = []
-            for result in results:
+
+            from itertools import chain
+            completed = jobs.next_batch()
+            completed = pool.gather(completed)
+
+            for result in chain.from_iterable(completed):
                 vt, vt_neighbors = result
                 for vt2 in vt_neighbors:
                     if is_new(vt2):
@@ -91,17 +96,25 @@ def run_parallel(root, pool, graph):
                         progress.update(task_exploring, total=len(seen))
                 # graph[vt] = vt_neighbors
                 progress.update(task_exploring, advance=1)
-            progress.update(task_jobs, advance=1)
+
+            finished_jobs += len(completed)
+            progress.update(task_jobs, advance=len(completed))
+
             if not tasks:
                 continue
-            if len(tasks) < 8:
-                batches = [tasks]
-            else:
-                batches = [tasks[:len(tasks)//2], tasks[len(tasks)//2:]]
+
+            # We want there to always be 2 * threads jobs in the queue.
+            target = max(1, 3 * threads - (submitted_jobs - finished_jobs))
+
+            batches = [tasks[offset::target] for offset in range(target)]
+
             for batch in batches:
                 jobs.add(pool.submit(geometric_neighbors_batched, batch))
                 submitted_jobs += 1
+
             progress.update(task_jobs, total=submitted_jobs)
+
+    return len(seen)
 
 
 def main():
@@ -136,10 +149,10 @@ def main():
     import datetime
     t0 = datetime.datetime.now()
     graph = {}
-    run_parallel(root=vt0, pool=pool, graph=graph)
+    nodes = run_parallel(root=vt0, pool=pool, threads=threads, graph=graph)
     t1 = datetime.datetime.now()
     elapsed = t1 - t0
-    print(f'{len(graph)} triangulations computed in {elapsed * threads} CPU time')
+    print(f'{nodes} triangulations computed in {elapsed * threads} CPU time')
 
 
 if __name__ == '__main__':
