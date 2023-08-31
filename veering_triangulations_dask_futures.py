@@ -56,14 +56,28 @@ def run_parallel(root, pool, graph):
     that workers are restarted to avoid leaking
     """
     vt0 = dumps(root)
-    graph[vt0] = []
+    # graph[vt0] = []
+
+    def is_new(vt):
+        from hashlib import md5
+        hash = md5(vt).digest()
+        if hash in seen:
+            return False
+        seen.add(hash)
+        return True
+
+    seen = set()
+    assert is_new(vt0)
 
     from dask.distributed import as_completed
     jobs = as_completed([pool.submit(geometric_neighbors_batched, [vt0])], with_results=True)
 
+    submitted_jobs = 1
+
     from rich.progress import Progress, TextColumn, TimeElapsedColumn, BarColumn, MofNCompleteColumn
     with Progress(TextColumn("{task.description}"), BarColumn(), TimeElapsedColumn(), MofNCompleteColumn(), transient=True, refresh_per_second=1) as progress:
-        task = progress.add_task("completing graph", total=len(graph))
+        task_exploring = progress.add_task("exploring graph", total=len(seen))
+        task_jobs = progress.add_task("processing batched jobs", total=submitted_jobs)
 
         for completed in jobs:
             _, results = completed
@@ -71,12 +85,13 @@ def run_parallel(root, pool, graph):
             for result in results:
                 vt, vt_neighbors = result
                 for vt2 in vt_neighbors:
-                    if vt2 not in graph:
+                    if is_new(vt2):
                         tasks.append(vt2)
-                        graph[vt2] = None
-                        progress.update(task, total=len(graph))
-                graph[vt] = vt_neighbors
-                progress.update(task, advance=1)
+                        # graph[vt2] = None
+                        progress.update(task_exploring, total=len(seen))
+                # graph[vt] = vt_neighbors
+                progress.update(task_exploring, advance=1)
+            progress.update(task_jobs, advance=1)
             if not tasks:
                 continue
             if len(tasks) < 8:
@@ -85,6 +100,8 @@ def run_parallel(root, pool, graph):
                 batches = [tasks[:len(tasks)//2], tasks[len(tasks)//2:]]
             for batch in batches:
                 jobs.add(pool.submit(geometric_neighbors_batched, batch))
+                submitted_jobs += 1
+            progress.update(task_jobs, total=submitted_jobs)
 
 
 def main():
