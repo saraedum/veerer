@@ -15,7 +15,6 @@ dependencies:
   - sympy
   - sagemath-db-conway-polynomials
   - sagelib=8
-  - rich
   # some of the tests rely on ipywidgets which is not required by sagelib
   - ipywidgets
   # sagelib<9.2 does not explicitly install libiconv which is needed in lots of places.
