@@ -88,16 +88,14 @@ def run_parallel(root, pool, graph):
 
 
 def main():
+    import os
+    threads = os.cpu_count()
+
     import dask.distributed
-    cores = 24
-    pool = dask.distributed.Client(n_workers=2*cores)
+    pool = dask.distributed.Client(n_workers=threads)
     # pool = dask.distributed.Client("localhost:8786", direct_to_workers=False)
     # preload="dask_preload", serializers=["pickle"], deserializers=["pickle"], nworkers=8, nthreads=1)
 
-    import sys
-    from time import sleep, time
-
-    import sage.all
     from veerer import VeeringTriangulation
     from surface_dynamics import AbelianStratum
 
@@ -124,7 +122,7 @@ def main():
     run_parallel(root=vt0, pool=pool, graph=graph)
     t1 = datetime.datetime.now()
     elapsed = t1 - t0
-    print(f'{len(graph)} triangulations computed in {elapsed * 2 * cores} CPU time')
+    print(f'{len(graph)} triangulations computed in {elapsed * threads} CPU time')
 
 
 if __name__ == '__main__':
