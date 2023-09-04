@@ -1,6 +1,7 @@
 import sage.all
 import compress_pickle
 import click
+import os
 
 
 def dumps(*args, **kwargs):
@@ -155,23 +156,23 @@ def loose_ends(db):
 
 @click.command()
 @click.option('--recover/--no-recover', default=False, help='Continue from a previous aborted run.')
-def main(recover):
-    import os
-    threads = os.cpu_count()
-
+@click.option('--threads', default=os.cpu_count(), help='The number of simultaneous hyperthreads for statistical purposes.')
+@click.option('--scheduler', default=None, help='The scheduler file to use, if not specified, the main program will serve as the scheduler.')
+@click.option('--database', default='/tmp/ruth.cache', help='The path to the database to store the graph for --recover and later analysis.')
+def main(recover, threads, scheduler, graph):
     import dask.distributed
-    pool = dask.distributed.Client(n_workers=threads) # scheduler_file="/tmp/ruth.scheduler.json", direct_to_workers=True)
+    pool = dask.distributed.Client(scheduler_file=scheduler, direct_to_workers=True)
 
     from veerer import VeeringTriangulation
     from surface_dynamics import AbelianStratum
 
     # stratum_component = AbelianStratum(4).odd_component()
     # stratum_component = AbelianStratum(2, 2).hyperelliptic_component()
-    stratum_component = AbelianStratum(4).hyperelliptic_component()
+    # stratum_component = AbelianStratum(4).hyperelliptic_component()
     # stratum_component = AbelianStratum(3, 1).unique_component()
     # stratum_component = AbelianStratum(2, 2).hyperelliptic_component()
     # stratum_component = AbelianStratum(2, 2).odd_component()
-    # stratum_component = AbelianStratum(6).hyperelliptic_component()
+    stratum_component = AbelianStratum(6).hyperelliptic_component()
     # stratum_component = AbelianStratum(6).odd_component()
 
     import os
@@ -185,13 +186,13 @@ def main(recover):
 
     import dbm
     if recover:
-        with dbm.open('/tmp/ruth.cache', 'r') as graph:
+        with dbm.open(database, 'r') as graph:
             roots, seen = loose_ends(graph)
 
         if not roots and not seen:
             roots = [dumps(vt0)]
 
-    with dbm.open('/tmp/ruth.cache', 'c' if recover else 'n') as graph:
+    with dbm.open(database, 'c' if recover else 'n') as graph:
         import datetime
         t0 = datetime.datetime.now()
         nodes = explore(roots=roots, pool=pool, threads=threads, graph=graph, seen=seen, completed=max(0, len(graph) - len(roots)))
