@@ -13,7 +13,7 @@ def loads(*args, **kwargs):
     return compress_pickle.loads(*args, compression="bz2", **kwargs)
 
 
-def geometric_neighbors(vtd):
+def geometric_neighbors(vtd, backend):
     r"""
     Return the pair ``(vt, list_of_neighbors)`` that consists of the input
     triangulation ``vt`` together with the list ``list_of_neighbors`` of
@@ -21,7 +21,7 @@ def geometric_neighbors(vtd):
     """
     vt = loads(vtd)
     ans = []
-    for edges, col in vt.geometric_flips(backend='ppl'):
+    for edges, col in vt.geometric_flips(backend=backend):
         new_vt = vt.copy(mutable=True)
         for e in edges:
             new_vt.flip(e, col, check=False)
@@ -31,8 +31,9 @@ def geometric_neighbors(vtd):
     return vtd, ans
 
 
-def geometric_neighbors_batched(vts):
-    return [geometric_neighbors(vt) for vt in vts]
+def geometric_neighbors_batched(vts_backend):
+    vts, backend = vts_backend
+    return [geometric_neighbors(vt, backend=backend) for vt in vts]
 
 
 def md5(vt):
@@ -40,7 +41,7 @@ def md5(vt):
     return hashlib.md5(vt).digest()
 
 
-def explore(roots, pool, threads, graph, seen=None, completed=0):
+def explore(roots, pool, threads, graph, seen=None, completed=0, backend='ppl'):
     if seen is None:
         seen = set()
 
@@ -73,7 +74,7 @@ def explore(roots, pool, threads, graph, seen=None, completed=0):
         nbatches = max(nbatches_from_threads, nbatches_from_package_size)
         nbatches = min(len(tasks), nbatches)
 
-        batches = [tasks[offset::nbatches] for offset in range(nbatches)]
+        batches = [(tasks[offset::nbatches], backend) for offset in range(nbatches)]
         batches = pool.scatter(batches)
         pool.replicate(batches, n=2)
 
@@ -176,15 +177,15 @@ def loose_ends(db):
 @click.option('--scheduler', default=None, help='The scheduler file to use, if not specified, the main program will serve as the scheduler.')
 @click.option('--database', default='/tmp/ruth.cache', help='The path to the database to store the graph for --recover and later analysis.')
 @click.option('--stratum-component', default=0, type=int)
-def main(recover, threads, scheduler, database, stratum_component):
+@click.option('--backend', default='ppl')
+def main(recover, threads, scheduler, database, stratum_component, backend):
     import dask.distributed
-    pool = dask.distributed.Client(scheduler_file=scheduler, direct_to_workers=True, connection_limit=2**16)
+    pool = dask.distributed.Client(scheduler_file=scheduler, direct_to_workers=True, connection_limit=2**16, preload="sage.all")
 
     from veerer import VeeringTriangulation
-    from surface_dynamics import AbelianStratum
+    from surface_dynamics import AbelianStrata, QuadraticStrata
 
-    stratum_component =
-        ([C for d in range(6, 9) for H in AbelianStrata(dimension=d) for C in H.components()] + [C for d in range(3, 9) for Q in QuadraticStrata(dimension=d, nb_poles=0) for C in Q.components()])[stratum_component]
+    stratum_component = ([C for d in range(6, 9) for H in AbelianStrata(dimension=d) for C in H.components()] + [C for d in range(3, 9) for Q in QuadraticStrata(dimension=d, nb_poles=0) for C in Q.components()])[stratum_component]
 
     print('Computing geometric veering triangulations in %s' % stratum_component)
     vt0 = VeeringTriangulation.from_stratum(stratum_component).copy(mutable=True)
@@ -205,7 +206,7 @@ def main(recover, threads, scheduler, database, stratum_component):
     with dbm.open(database, 'c' if recover else 'n') as graph:
         import datetime
         t0 = datetime.datetime.now()
-        nodes = explore(roots=roots, pool=pool, threads=threads, graph=graph, seen=seen, completed=max(0, len(graph) - len(roots)))
+        nodes = explore(roots=roots, pool=pool, threads=threads, graph=graph, seen=seen, completed=max(0, len(graph) - len(roots)), backend=backend)
         t1 = datetime.datetime.now()
         elapsed = t1 - t0
         print(f'{nodes} triangulations computed in {elapsed * threads} CPU time; {elapsed} wall time')

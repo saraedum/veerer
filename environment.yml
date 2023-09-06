@@ -15,7 +15,7 @@ dependencies:
   - gap-defaults
   - sympy
   - sagemath-db-conway-polynomials
-  - sagelib=8
+  - sagelib=10
   # some of the tests rely on ipywidgets which is not required by sagelib
   - ipywidgets
   # sagelib<9.2 does not explicitly install libiconv which is needed in lots of places.
@@ -29,6 +29,7 @@ dependencies:
   - pip
   - click
   - rich
+  - pynormaliz
   - surface-dynamics  # optional: surface-dynamics
   - pip:
     - compress_pickle
