@@ -1,7 +1,8 @@
-import sage.all
 import compress_pickle
 import click
 import os
+
+BATCH_LEN=48
 
 
 def dumps(*args, **kwargs):
@@ -53,7 +54,7 @@ def explore(roots, pool, threads, graph, seen=None, completed=0):
     assert all(is_new(vt) for vt in roots)
 
     from dask.distributed import as_completed
-    jobs = as_completed([])
+    jobs = as_completed([], with_results=True)
 
     def enqueue(tasks):
         nonlocal submitted_jobs, progress
@@ -61,21 +62,26 @@ def explore(roots, pool, threads, graph, seen=None, completed=0):
         if not tasks:
             return
 
+        progress.reset(task_sending)
+        progress.update(task_sending, completed=0, total=len(tasks), visible=True)
+
         # We want there to always be 2 * threads jobs in the queue.
-        nbatches_from_threads = max(1, 3 * threads - (submitted_jobs - finished_jobs))
-        # We do not want to ship any tasks that contain more than 64 jobs.
-        nbatches_from_package_size = max(1, len(tasks) // 64)
+        nbatches_from_threads = max(1, 2 * threads - (submitted_jobs - finished_jobs))
+        # We do not want to ship any tasks that contain more than BATCH_LEN jobs.
+        nbatches_from_package_size = max(1, len(tasks) // BATCH_LEN)
 
         nbatches = max(nbatches_from_threads, nbatches_from_package_size)
         nbatches = min(len(tasks), nbatches)
 
         batches = [tasks[offset::nbatches] for offset in range(nbatches)]
         batches = pool.scatter(batches)
+        pool.replicate(batches, n=2)
 
         jobs.update(pool.map(geometric_neighbors_batched, batches))
 
         submitted_jobs += len(batches)
         progress.update(task_jobs, total=submitted_jobs)
+        progress.update(task_sending, visible=False)
 
     submitted_jobs = 1
     finished_jobs = 0
@@ -84,30 +90,40 @@ def explore(roots, pool, threads, graph, seen=None, completed=0):
     with Progress(TextColumn("{task.description}"), BarColumn(), TimeElapsedColumn(), MofNCompleteColumn(), transient=True, refresh_per_second=1) as progress:
         task_exploring = progress.add_task("exploring graph", completed=completed, total=len(seen))
         task_jobs = progress.add_task("processing batched jobs", total=submitted_jobs)
+        task_batching = progress.add_task("...", total=0, visible=False)
+        task_sending = progress.add_task("sending tasks to workers", visible=False)
 
         enqueue(roots)
 
         while not jobs.is_empty():
             tasks = []
 
-            from itertools import chain
+            progress.reset(task_batching)
+            progress.update(task_batching, description="waiting for finished batches", total=1, completed=0, visible=True)
             completed = jobs.next_batch()
-            completed = pool.gather(completed)
+            # progress.update(task_batching, description="loading data for finished batches", total=len(completed), completed=0)
+            # completed = pool.gather(completed)
 
-            for result in chain.from_iterable(completed):
-                vt, vt_neighbors = result
-                for vt2 in vt_neighbors:
-                    if is_new(vt2):
-                        tasks.append(vt2)
-                        progress.update(task_exploring, total=len(seen))
-                graph[vt] = b"".join(md5(neighbor) for neighbor in vt_neighbors)
-                progress.update(task_exploring, advance=1)
+            progress.update(task_batching, total=sum(len(result[1]) for _, batch in completed for result in batch), completed=0)
+            for _, batch in completed:
+                progress.update(task_batching, description="processing discovered triangulations")
+                for result in batch:
+                    vt, vt_neighbors = result
+                    for vt2 in vt_neighbors:
+                        if is_new(vt2):
+                            tasks.append(vt2)
+                            progress.update(task_exploring, total=len(seen))
+                        progress.update(task_batching, advance=1)
+                    graph[vt] = b"".join(md5(neighbor) for neighbor in vt_neighbors)
+                    progress.update(task_exploring, advance=1)
+                finished_jobs += 1
+                progress.update(task_jobs, advance=1)
 
-            finished_jobs += len(completed)
-            progress.update(task_jobs, advance=len(completed))
+                if len(tasks) >= BATCH_LEN * 2 * threads:
+                    enqueue(tasks)
+                    tasks = []
 
             enqueue(tasks)
-
 
     return len(seen)
 
@@ -150,7 +166,7 @@ def loose_ends(db):
     assert not loose_ends_md5, f"{len(loose_ends_md5)} had no pickle registered that lead to their discovery"
 
     print(f"Need to explore from {len(loose_ends)} root cells to continue.")
-    
+
     return list(loose_ends), seen
 
 
