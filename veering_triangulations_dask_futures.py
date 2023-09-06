@@ -175,23 +175,17 @@ def loose_ends(db):
 @click.option('--threads', default=os.cpu_count(), help='The number of simultaneous hyperthreads for statistical purposes.')
 @click.option('--scheduler', default=None, help='The scheduler file to use, if not specified, the main program will serve as the scheduler.')
 @click.option('--database', default='/tmp/ruth.cache', help='The path to the database to store the graph for --recover and later analysis.')
-def main(recover, threads, scheduler, graph):
+@click.option('--stratum-component', default=0, type=int)
+def main(recover, threads, scheduler, database, stratum_component):
     import dask.distributed
-    pool = dask.distributed.Client(scheduler_file=scheduler, direct_to_workers=True)
+    pool = dask.distributed.Client(scheduler_file=scheduler, direct_to_workers=True, connection_limit=2**16)
 
     from veerer import VeeringTriangulation
     from surface_dynamics import AbelianStratum
 
-    # stratum_component = AbelianStratum(4).odd_component()
-    # stratum_component = AbelianStratum(2, 2).hyperelliptic_component()
-    # stratum_component = AbelianStratum(4).hyperelliptic_component()
-    # stratum_component = AbelianStratum(3, 1).unique_component()
-    # stratum_component = AbelianStratum(2, 2).hyperelliptic_component()
-    # stratum_component = AbelianStratum(2, 2).odd_component()
-    stratum_component = AbelianStratum(6).hyperelliptic_component()
-    # stratum_component = AbelianStratum(6).odd_component()
+    stratum_component =
+        ([C for d in range(6, 9) for H in AbelianStrata(dimension=d) for C in H.components()] + [C for d in range(3, 9) for Q in QuadraticStrata(dimension=d, nb_poles=0) for C in Q.components()])[stratum_component]
 
-    import os
     print('Computing geometric veering triangulations in %s' % stratum_component)
     vt0 = VeeringTriangulation.from_stratum(stratum_component).copy(mutable=True)
     vt0.set_canonical_labels()
