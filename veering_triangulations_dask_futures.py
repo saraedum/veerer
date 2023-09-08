@@ -185,14 +185,23 @@ def main(recover, threads, scheduler, database, stratum_component, backend):
     from veerer import VeeringTriangulation
     from surface_dynamics import AbelianStrata, QuadraticStrata
 
-    stratum_component = ([C for d in range(6, 9) for H in AbelianStrata(dimension=d) for C in H.components()] + [C for d in range(3, 9) for Q in QuadraticStrata(dimension=d, nb_poles=0) for C in Q.components()])[stratum_component]
+    if stratum_component == 3413:
+        from veerer.linear_family import VeeringTriangulationLinearFamilies
 
-    print('Computing geometric veering triangulations in %s' % stratum_component)
-    vt0 = VeeringTriangulation.from_stratum(stratum_component).copy(mutable=True)
-    vt0.set_canonical_labels()
-    vt0.set_immutable()
+        print('Computing geometric veering of the (3, 4, 13) triangle')
+        vt = VeeringTriangulationLinearFamilies.triangle_3_4_13_unfolding_orbit_closure().copy(mutable=True)
+    else:
+        stratum_component = ([C for d in range(6, 9) for H in AbelianStrata(dimension=d) for C in H.components()] + [C for d in range(3, 9) for Q in QuadraticStrata(dimension=d, nb_poles=0) for C in Q.components()])[stratum_component]
 
-    roots = [dumps(vt0)]
+        print('Computing geometric veering triangulations in %s' % stratum_component)
+        vt = VeeringTriangulation.from_stratum(stratum_component).copy(mutable=True)
+        while not vt.is_geometric():
+            print(".", end="")
+            vt.random_forward_flip()
+    vt.set_canonical_labels()
+    vt.set_immutable()
+
+    roots = [dumps(vt)]
     seen = None
 
     import dbm
@@ -201,7 +210,7 @@ def main(recover, threads, scheduler, database, stratum_component, backend):
             roots, seen = loose_ends(graph)
 
         if not roots and not seen:
-            roots = [dumps(vt0)]
+            roots = [dumps(vt)]
 
     with dbm.open(database, 'c' if recover else 'n') as graph:
         import datetime
