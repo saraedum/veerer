@@ -1,5 +1,4 @@
 import compress_pickle
-import asyncio
 import click
 import os
 
@@ -88,8 +87,8 @@ def explore(roots, pool, threads, graph, seen=None, completed=0, backend='ppl'):
 
     from rich.progress import Progress, TextColumn, TimeElapsedColumn, BarColumn, MofNCompleteColumn
     with Progress(TextColumn("{task.description}"), BarColumn(), TimeElapsedColumn(), MofNCompleteColumn(), transient=True, refresh_per_second=1) as progress:
-        task_exploring = progress.add_task("exploring graph", completed=completed, total=len(seen))
-        task_jobs = progress.add_task("processing batched jobs", total=submitted_jobs)
+        task_exploring = progress.add_task("exploring graph", completed=completed, total=len(seen), visible=True)
+        task_jobs = progress.add_task("processing batched jobs", total=submitted_jobs, visible=True)
         task_batching = progress.add_task("...", total=0, visible=False)
         task_sending = progress.add_task("sending tasks to workers", visible=False)
 
@@ -178,6 +177,8 @@ def loose_ends(db):
 @click.option('--stratum-component', default=0, type=int)
 @click.option('--backend', default='ppl')
 def main(recover, threads, scheduler, database, stratum_component, backend):
+    import dask.config
+    dask.config.set({'distributed.worker.daemon': False})
     import dask.distributed
     pool = dask.distributed.Client(scheduler_file=scheduler, direct_to_workers=True, connection_limit=2**16)
 

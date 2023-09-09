@@ -20,7 +20,6 @@ see invocation above.)
 
 import multiprocessing
 
-
 forkserver = multiprocessing.get_context("forkserver")
 multiprocessing.set_forkserver_preload(["sage.all"])
 
@@ -36,12 +35,12 @@ class Batched:
 
 class Worker:
     def __init__(self):
-        self._pipe = None
+        self._worker = None
+        self._work_queue = multiprocessing.Queue()
+        self._result_queue = multiprocessing.Queue()
 
     def _ensure(self):
-        if self._pipe is None:
-            self._pipe = forkserver.Pipe(duplex=True)
-
+        if self._worker is None:
             self._worker = forkserver.Process(target=Worker._work, args=(self,), daemon=True)
             self._worker.start()
 
@@ -49,17 +48,17 @@ class Worker:
     def _work(self):
         while True:
             try:
-                message = self._pipe[1].recv()
-            except EOFError:
+                message = self._work_queue.get()
+            except ValueError:
                 break
 
             callable, args, kwargs = message
-            self._pipe[1].send(callable(*args, **kwargs))
+            self._result_queue.put(callable(*args, **kwargs))
 
     def __call__(self, callable, *args, **kwargs):
         self._ensure()
-        self._pipe[0].send((callable, args, kwargs))
-        return self._pipe[0].recv()
+        self._work_queue.put((callable, args, kwargs))
+        return self._result_queue.get()
 
 
 work = Worker()
