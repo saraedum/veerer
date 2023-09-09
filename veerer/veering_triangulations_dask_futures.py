@@ -1,8 +1,10 @@
 import compress_pickle
+import asyncio
 import click
 import os
 
-BATCH_LEN=48
+
+BATCH_LEN = 48
 
 
 def dumps(*args, **kwargs):
@@ -29,11 +31,6 @@ def geometric_neighbors(vtd, backend):
         new_vt.set_immutable()
         ans.append(dumps(new_vt))
     return vtd, ans
-
-
-def geometric_neighbors_batched(vts_backend):
-    vts, backend = vts_backend
-    return [geometric_neighbors(vt, backend=backend) for vt in vts]
 
 
 def md5(vt):
@@ -74,11 +71,13 @@ def explore(roots, pool, threads, graph, seen=None, completed=0, backend='ppl'):
         nbatches = max(nbatches_from_threads, nbatches_from_package_size)
         nbatches = min(len(tasks), nbatches)
 
-        batches = [(tasks[offset::nbatches], backend) for offset in range(nbatches)]
+        batches = [tasks[offset::nbatches] for offset in range(nbatches)]
         batches = pool.scatter(batches)
         pool.replicate(batches, n=2)
 
-        jobs.update(pool.map(geometric_neighbors_batched, batches))
+        from veerer.worker import Batched
+        from veerer.veering_triangulations_dask_futures import geometric_neighbors
+        jobs.update(pool.map(Batched(geometric_neighbors, backend=backend), batches))
 
         submitted_jobs += len(batches)
         progress.update(task_jobs, total=submitted_jobs)
@@ -94,7 +93,7 @@ def explore(roots, pool, threads, graph, seen=None, completed=0, backend='ppl'):
         task_batching = progress.add_task("...", total=0, visible=False)
         task_sending = progress.add_task("sending tasks to workers", visible=False)
 
-        enqueue(roots)
+        enqueue([(root,) for root in roots])
 
         while not jobs.is_empty():
             tasks = []
@@ -112,7 +111,7 @@ def explore(roots, pool, threads, graph, seen=None, completed=0, backend='ppl'):
                     vt, vt_neighbors = result
                     for vt2 in vt_neighbors:
                         if is_new(vt2):
-                            tasks.append(vt2)
+                            tasks.append((vt2,))
                             progress.update(task_exploring, total=len(seen))
                         progress.update(task_batching, advance=1)
                     graph[vt] = b"".join(md5(neighbor) for neighbor in vt_neighbors)
@@ -180,7 +179,7 @@ def loose_ends(db):
 @click.option('--backend', default='ppl')
 def main(recover, threads, scheduler, database, stratum_component, backend):
     import dask.distributed
-    pool = dask.distributed.Client(scheduler_file=scheduler, direct_to_workers=True, connection_limit=2**16, preload="sage.all")
+    pool = dask.distributed.Client(scheduler_file=scheduler, direct_to_workers=True, connection_limit=2**16)
 
     from veerer import VeeringTriangulation
     from surface_dynamics import AbelianStrata, QuadraticStrata
