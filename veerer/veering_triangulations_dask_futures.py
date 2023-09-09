@@ -1,6 +1,7 @@
 import compress_pickle
 import click
 import os
+import asyncio
 
 
 BATCH_LEN = 48
@@ -37,7 +38,7 @@ def md5(vt):
     return hashlib.md5(vt).digest()
 
 
-def explore(roots, pool, threads, graph, seen=None, completed=0, backend='ppl'):
+async def explore(roots, pool, threads, graph, seen=None, completed=0, backend='ppl'):
     if seen is None:
         seen = set()
 
@@ -52,8 +53,9 @@ def explore(roots, pool, threads, graph, seen=None, completed=0, backend='ppl'):
 
     from dask.distributed import as_completed
     jobs = as_completed([], with_results=True)
+    jobs = []
 
-    def enqueue(tasks):
+    async def enqueue(tasks):
         nonlocal submitted_jobs, progress
 
         if not tasks:
@@ -71,12 +73,12 @@ def explore(roots, pool, threads, graph, seen=None, completed=0, backend='ppl'):
         nbatches = min(len(tasks), nbatches)
 
         batches = [tasks[offset::nbatches] for offset in range(nbatches)]
-        batches = pool.scatter(batches)
-        pool.replicate(batches, n=2)
+        batches = await pool.scatter(batches)
+        await pool.replicate(batches, n=2)
 
         from veerer.worker import Batched
         from veerer.veering_triangulations_dask_futures import geometric_neighbors
-        jobs.update(pool.map(Batched(geometric_neighbors, backend=backend), batches))
+        jobs.extend(pool.map(Batched(geometric_neighbors, backend=backend), batches))
 
         submitted_jobs += len(batches)
         progress.update(task_jobs, total=submitted_jobs)
@@ -92,19 +94,21 @@ def explore(roots, pool, threads, graph, seen=None, completed=0, backend='ppl'):
         task_batching = progress.add_task("...", total=0, visible=False)
         task_sending = progress.add_task("sending tasks to workers", visible=False)
 
-        enqueue([(root,) for root in roots])
+        await enqueue([(root,) for root in roots])
 
-        while not jobs.is_empty():
+        while jobs:
             tasks = []
 
             progress.reset(task_batching)
             progress.update(task_batching, description="waiting for finished batches", total=1, completed=0, visible=True)
-            completed = jobs.next_batch()
+            completed, _ = await asyncio.wait(jobs)
+            jobs = []
             # progress.update(task_batching, description="loading data for finished batches", total=len(completed), completed=0)
-            # completed = pool.gather(completed)
+            completed = await pool.gather(completed)
 
-            progress.update(task_batching, total=sum(len(result[1]) for _, batch in completed for result in batch), completed=0)
-            for _, batch in completed:
+            progress.update(task_batching, total=sum(len(result[1]) for batch in completed for result in batch), completed=0)
+            for batch in completed:
+                batch = batch.result()
                 progress.update(task_batching, description="processing discovered triangulations")
                 for result in batch:
                     vt, vt_neighbors = result
@@ -119,10 +123,10 @@ def explore(roots, pool, threads, graph, seen=None, completed=0, backend='ppl'):
                 progress.update(task_jobs, advance=1)
 
                 if len(tasks) >= BATCH_LEN * 2 * threads:
-                    enqueue(tasks)
+                    await enqueue(tasks)
                     tasks = []
 
-            enqueue(tasks)
+            await enqueue(tasks)
 
     return len(seen)
 
@@ -169,18 +173,11 @@ def loose_ends(db):
     return list(loose_ends), seen
 
 
-@click.command()
-@click.option('--recover/--no-recover', default=False, help='Continue from a previous aborted run.')
-@click.option('--threads', default=os.cpu_count(), help='The number of simultaneous hyperthreads for statistical purposes.')
-@click.option('--scheduler', default=None, help='The scheduler file to use, if not specified, the main program will serve as the scheduler.')
-@click.option('--database', default='/tmp/ruth.cache', help='The path to the database to store the graph for --recover and later analysis.')
-@click.option('--stratum-component', default=0, type=int)
-@click.option('--backend', default='ppl')
-def main(recover, threads, scheduler, database, stratum_component, backend):
+async def _main(recover, threads, scheduler, database, stratum_component, backend):
     import dask.config
     dask.config.set({'distributed.worker.daemon': False})
     import dask.distributed
-    pool = dask.distributed.Client(scheduler_file=scheduler, direct_to_workers=True, connection_limit=2**16)
+    pool = await dask.distributed.Client(scheduler_file=scheduler, direct_to_workers=True, connection_limit=2**16, asynchronous=True)
 
     from veerer import VeeringTriangulation
     from surface_dynamics import AbelianStrata, QuadraticStrata
@@ -215,10 +212,22 @@ def main(recover, threads, scheduler, database, stratum_component, backend):
     with dbm.open(database, 'c' if recover else 'n') as graph:
         import datetime
         t0 = datetime.datetime.now()
-        nodes = explore(roots=roots, pool=pool, threads=threads, graph=graph, seen=seen, completed=max(0, len(graph) - len(roots)), backend=backend)
+        nodes = await explore(roots=roots, pool=pool, threads=threads, graph=graph, seen=seen, completed=max(0, len(graph) - len(roots)), backend=backend)
         t1 = datetime.datetime.now()
         elapsed = t1 - t0
         print(f'{nodes} triangulations computed in {elapsed * threads} CPU time; {elapsed} wall time')
+    await pool.close()
+
+
+@click.command()
+@click.option('--recover/--no-recover', default=False, help='Continue from a previous aborted run.')
+@click.option('--threads', default=os.cpu_count(), help='The number of simultaneous hyperthreads for statistical purposes.')
+@click.option('--scheduler', default=None, help='The scheduler file to use, if not specified, the main program will serve as the scheduler.')
+@click.option('--database', default='/tmp/ruth.cache', help='The path to the database to store the graph for --recover and later analysis.')
+@click.option('--stratum-component', default=0, type=int)
+@click.option('--backend', default='ppl')
+def main(recover, threads, scheduler, database, stratum_component, backend):
+    asyncio.run(_main(recover, threads, scheduler, database, stratum_component, backend))
 
 
 if __name__ == '__main__':
