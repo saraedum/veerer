@@ -36,11 +36,11 @@ class Batched:
 class Worker:
     def __init__(self):
         self._worker = None
-        self._work_queue = multiprocessing.Queue()
-        self._result_queue = multiprocessing.Queue()
 
     def _ensure(self):
         if self._worker is None:
+            self._work_queue = forkserver.Queue()
+            self._result_queue = forkserver.Queue()
             self._worker = forkserver.Process(target=Worker._work, args=(self,), daemon=True)
             self._worker.start()
 
