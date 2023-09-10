@@ -2,6 +2,7 @@ import compress_pickle
 import click
 import os
 import asyncio
+from contextlib import contextmanager
 
 
 def dumps(*args, **kwargs):
@@ -35,28 +36,116 @@ def md5(vt):
     return hashlib.md5(vt).digest()
 
 
+class ExplorerStats:
+    def __init__(self, explored_vertices, unexplored_vertices):
+        self._vertices_unscheduled = 0
+        self._vertices_scheduled = 0
+        self._vertices_explored = explored_vertices
+        self._vertices_unexplored = unexplored_vertices
+        self._batches_unconsumed = 0
+        self._batches_consumed = 0
+        self._neighborhoods_unconsumed = 0
+        self._neighborhoods_consumed = 0
+
+        from rich.progress import Progress, TextColumn, TimeElapsedColumn, BarColumn, MofNCompleteColumn
+        self._progress = Progress(TextColumn("{task.description}"), BarColumn(), TimeElapsedColumn(), MofNCompleteColumn(), transient=True, refresh_per_second=2)
+        self._task_exploring = self._progress.add_task("exploring vertices", visible=False)
+        self._task_consuming = self._progress.add_task("processing neighborhoods", visible=False)
+        self._task_scheduling = self._progress.add_task("scheduling exploration", visible=False)
+        self._task_scattering = self._progress.add_task("scattering vertices", visible=False)
+        self._task_replicating = self._progress.add_task("replicating workload", visible=False)
+
+    @contextmanager
+    def __call__(self):
+        self._progress.__enter__()
+        try:
+            self._update_exploring()
+            self._progress.update(self._task_exploring, visible=True)
+            yield
+        finally:
+            self._progress.__exit__(None, None, None)
+
+    def enqueue_for_scheduling(self, vertex):
+        self._vertices_unscheduled += 1
+        self._vertices_unexplored += 1
+        self._update_exploring()
+        self._update_scheduling()
+
+    @contextmanager
+    def scattering(self, batches):
+        self._progress.reset(self._task_scattering, visible=True, total=sum(len(batch) for batch in batches))
+        yield
+        self._progress.update(self._task_scattering, visible=False)
+
+    @contextmanager
+    def scheduling(self, batches):
+        vertices = sum(len(batch) for batch in batches)
+        yield
+        self._vertices_unscheduled -= vertices
+        self._vertices_scheduled += vertices
+        if self._vertices_unscheduled == 0:
+            self._vertices_scheduled = 0
+        self._update_scheduling()
+
+    @contextmanager
+    def replicating(self, batches):
+        self._progress.reset(self._task_replicating, visible=True, total=len(batches))
+        yield
+        self._progress.update(self._task_replicating, visible=False)
+
+    @contextmanager
+    def consuming(self, batches):
+        total = len(batches)
+        self._progress.reset(self._task_consuming, visible=True, total=total)
+
+        def expand_batch(vertices):
+            nonlocal total
+            total += (len(vertices) - 1)
+            self._progress.update(self._task_consuming, total=total)
+
+        def advance():
+            self._vertices_explored += 1
+            self._vertices_unexplored -= 1
+            self._progress.update(self._task_consuming, advance=1)
+            self._update_exploring()
+
+        yield (expand_batch, advance)
+        self._progress.update(self._task_consuming, visible=False, total=0, completed=0)
+
+    def _update_scheduling(self):
+        if self._vertices_unscheduled == 0:
+            self._progress.update(self._task_scheduling, completed=0, total=0, visible=False)
+            return
+
+        if self._vertices_scheduled == 0:
+            self._progress.reset(self._task_scheduling, total=self._vertices_unscheduled, visible=True)
+            return
+
+        self._progress.update(self._task_scheduling, total=self._vertices_unscheduled + self._vertices_scheduled, completed=self._vertices_scheduled)
+
+    def _update_exploring(self):
+        self._progress.update(self._task_exploring, total=self._vertices_explored + self._vertices_unexplored, completed=self._vertices_explored)
+
+
 class Explorer:
     def __init__(self, graph, seen, pool, threads, backend='ppl'):
         self._to_be_scheduled = []
         self._pending_batches = []
+        self._replicators = set()
         self._graph = graph
         self._seen = seen
         self._pool = pool
         self._threads = threads
         self._backend = backend
-
-    async def explore(self, roots):
-        self._to_be_scheduled.extend(roots)
+        self._stats = ExplorerStats(explored_vertices=len(graph), unexplored_vertices=len(seen) - len(graph))
         self._scheduler_wakeup = asyncio.Future()
 
-        from rich.progress import Progress, TextColumn, TimeElapsedColumn, BarColumn, MofNCompleteColumn
-        with Progress(TextColumn("{task.description}"), BarColumn(), TimeElapsedColumn(), MofNCompleteColumn(), transient=True, refresh_per_second=5) as progress:
-            self._progress = progress
-            self._task_exploring = progress.add_task("exploring graph")
-            self._task_scheduling = progress.add_task("scheduling explorations")
-            self._task_consuming = progress.add_task("computing neighbors")
-            self._update_progress()
+    async def explore(self, roots):
+        for root in roots:
+            self._register_node(root)
+        assert len(self._to_be_scheduled) == len(roots)
 
+        with self._stats():
             _scheduler = asyncio.create_task(self._schedule())
             _consumer = asyncio.create_task(self._consume())
 
@@ -99,16 +188,27 @@ class Explorer:
                 continue
 
             to_be_scheduled = [(arg,) for arg in self._to_be_scheduled]
-            self._to_be_scheduled = []
 
             batches = [to_be_scheduled[offset::nbatches] for offset in range(nbatches)]
             assert all(batch for batch in batches)
 
-            from veerer.worker import Batched
-            from veerer.veering_triangulations_dask_futures import geometric_neighbors
-            self._pending_batches.extend(self._pool.map(Batched(geometric_neighbors, backend=self._backend), batches))
+            with self._stats.scheduling(batches):
+                with self._stats.scattering(batches):
+                    batches = await self._pool.scatter(batches)
 
-            self._update_progress()
+                self._to_be_scheduled = self._to_be_scheduled[len(to_be_scheduled):]
+
+                from veerer.worker import Batched
+                from veerer.veering_triangulations_dask_futures import geometric_neighbors
+                self._pending_batches.extend(self._pool.map(Batched(geometric_neighbors, backend=self._backend), batches))
+
+                async def replicate(batches):
+                    with self._stats.replicating(batches):
+                        await self._pool.replicate(batches, 2)
+
+                replicator = asyncio.create_task(replicate(batches))
+                self._replicators.add(replicator)
+                replicator.add_done_callback(self._replicators.discard)
 
     async def _consume(self):
         while True:
@@ -116,24 +216,21 @@ class Explorer:
                 completed, pending = await asyncio.wait(self._pending_batches[:self._threads], return_when=asyncio.FIRST_COMPLETED)
                 self._pending_batches = list(pending) + self._pending_batches[len(completed) + len(pending):]
 
-                for batch in completed:
-                    for result in batch.result():
-                        vt, neighbors = result
-                        for neighbor in neighbors:
-                            self._register_node(neighbor)
-                        self._graph[vt] = b"".join(md5(neighbor) for neighbor in neighbors)
-
-                self._update_progress()
+                with self._stats.consuming(completed) as (expand_batch, advance):
+                    for batch in completed:
+                        batch = batch.result()
+                        expand_batch(batch)
+                        for result in batch:
+                            vt, neighbors = result
+                            for neighbor in neighbors:
+                                self._register_node(neighbor)
+                            self._graph[vt] = b"".join(md5(neighbor) for neighbor in neighbors)
+                            advance()
 
             if not self._to_be_scheduled:
                 return
 
             await asyncio.sleep(0)
-
-    def _update_progress(self):
-        self._progress.update(self._task_exploring, completed=len(self._graph), total=len(self._seen), visible=True)
-        self._progress.update(self._task_scheduling, completed=0, total=len(self._to_be_scheduled), visible=True)
-        self._progress.update(self._task_consuming, completed=0, total=len(self._pending_batches), visible=True)
 
     def _register_node(self, vt):
         if not self._scheduler_wakeup.done():
@@ -144,6 +241,7 @@ class Explorer:
             return
         self._seen.add(key)
         self._to_be_scheduled.append(vt)
+        self._stats.enqueue_for_scheduling(vt)
 
 
 def loose_ends(db):
