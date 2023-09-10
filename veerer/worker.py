@@ -30,7 +30,7 @@ class Batched:
         self._kwargs = kwargs
 
     def __call__(self, batch):
-        return [work(self._callable, *item, **self._kwargs) for item in batch]
+        return tuple(work(self._callable, *item, **self._kwargs) for item in batch)
 
 
 class Worker:

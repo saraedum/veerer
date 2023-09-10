@@ -28,7 +28,7 @@ def geometric_neighbors(vtd, backend):
         new_vt.set_canonical_labels()
         new_vt.set_immutable()
         ans.append(dumps(new_vt))
-    return vtd, ans
+    return vtd, tuple(ans)
 
 
 def md5(vt):
@@ -180,17 +180,19 @@ class Explorer:
         if ntasks == 0:
             return "WAIT"
 
-        # We assume that everything in _pending_batches is actually being computed currently.
-        # So _threads many batches are being computed (but presumably almost
-        # done) and another _threads many are going to be computed shortly.
-        # We aim for there to be a buffer of another 3 threads many batches that can be picked up by workers.
-        TARGET_BATCHES = 5 * self._threads
+        # We assume that everything in _pending_batches is actually being
+        # computed currently. So _threads many batches are being computed (but
+        # presumably almost done) and another _threads many are going to be
+        # computed shortly. We aim for there to be a buffer of another BUFFER
+        # threads many batches that can be picked up by workers.
+        BUFFER = 1
+        TARGET_BATCHES = (BUFFER + 2) * self._threads
         batch_count_from_TARGET_BATCHES = max(1, TARGET_BATCHES - len(self._pending_batches))
 
         # We do not want batches to become too big as this causes delays in
         # network communication. But we also do not want them to be too small
         # as there is an overhead in spawning a task.
-        TARGET_BATCH_SIZE = 32
+        TARGET_BATCH_SIZE = 64
         batch_count_from_TARGET_BATCH_SIZE = max(1, ntasks // TARGET_BATCH_SIZE)
 
         if batch_count_from_TARGET_BATCHES == 1 and batch_count_from_TARGET_BATCH_SIZE < self._threads // 2:
@@ -224,7 +226,7 @@ class Explorer:
 
                 async def replicate(batches):
                     with self._stats.replicating(batches):
-                        await self._pool.replicate(batches, 2)
+                        await self._pool.replicate(batches, 1)
 
                 replicator = asyncio.create_task(replicate(batches))
                 self._replicators.add(replicator)
@@ -233,14 +235,15 @@ class Explorer:
     async def _consume(self):
         while True:
             while self._pending_batches:
-                completed, pending = await asyncio.wait(self._pending_batches[:self._threads], return_when=asyncio.FIRST_COMPLETED)
+                import dask.distributed
+                completed, pending = await dask.distributed.wait(self._pending_batches[:self._threads], return_when='FIRST_COMPLETED')
                 self._pending_batches = list(pending) + self._pending_batches[len(completed) + len(pending):]
 
                 completed = await self._pool.gather(completed)
 
                 with self._stats.consuming(completed) as (expand_batch, advance):
                     for batch in completed:
-                        batch = batch.result()
+                        # batch = batch.result()
                         expand_batch(batch)
                         for result in batch:
                             vt, neighbors = result
