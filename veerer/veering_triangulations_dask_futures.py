@@ -42,16 +42,17 @@ class ExplorerStats:
         self._vertices_scheduled = 0
         self._vertices_explored = explored_vertices
         self._vertices_unexplored = unexplored_vertices
-        self._batches_unconsumed = 0
-        self._batches_consumed = 0
-        self._neighborhoods_unconsumed = 0
-        self._neighborhoods_consumed = 0
+        self._batches_scheduled = 0
+        self._batches_processed = 0
+        self._batches_replicated = 0
+        self._batches_unreplicated = 0
 
         from rich.progress import Progress, TextColumn, TimeElapsedColumn, BarColumn, MofNCompleteColumn
         self._progress = Progress(TextColumn("{task.description}"), BarColumn(), TimeElapsedColumn(), MofNCompleteColumn(), transient=True, refresh_per_second=2)
         self._task_exploring = self._progress.add_task("exploring vertices", visible=False)
+        self._task_batches = self._progress.add_task("computing neighborhoods (batches)", visible=False)
         self._task_consuming = self._progress.add_task("processing neighborhoods", visible=False)
-        self._task_scheduling = self._progress.add_task("scheduling exploration", visible=False)
+        self._task_scheduling = self._progress.add_task("not scheduling computations", visible=False)
         self._task_scattering = self._progress.add_task("scattering vertices", visible=False)
         self._task_replicating = self._progress.add_task("replicating workload", visible=False)
 
@@ -61,6 +62,7 @@ class ExplorerStats:
         try:
             self._update_exploring()
             self._progress.update(self._task_exploring, visible=True)
+            self._progress.update(self._task_batches, visible=True)
             yield
         finally:
             self._progress.__exit__(None, None, None)
@@ -79,23 +81,37 @@ class ExplorerStats:
 
     @contextmanager
     def scheduling(self, batches):
+        self._progress.update(self._task_scheduling, description="scheduling computations")
         vertices = sum(len(batch) for batch in batches)
         yield
         self._vertices_unscheduled -= vertices
         self._vertices_scheduled += vertices
         if self._vertices_unscheduled == 0:
             self._vertices_scheduled = 0
+        self._batches_scheduled += len(batches)
         self._update_scheduling()
+        self._update_batches()
+        self._progress.update(self._task_scheduling, description="not scheduling computations")
 
     @contextmanager
     def replicating(self, batches):
-        self._progress.reset(self._task_replicating, visible=True, total=len(batches))
+        if self._batches_unreplicated == 0:
+            self._progress.reset(self._task_replicating, visible=True)
+        self._batches_unreplicated += len(batches)
+        self._progress.update(self._task_replicating, total=self._batches_replicated + self._batches_unreplicated)
         yield
-        self._progress.update(self._task_replicating, visible=False)
+        self._progress.update(self._task_replicating, advance=len(batches))
+        self._batches_replicated += len(batches)
+        self._batches_unreplicated -= len(batches)
+        if self._batches_unreplicated == 0:
+            self._batches_unreplicated = 0
+            self._progress.update(self._task_replicating, visible=False)
 
     @contextmanager
     def consuming(self, batches):
         total = len(batches)
+        self._batches_processed += total
+        self._update_batches()
         self._progress.reset(self._task_consuming, visible=True, total=total)
 
         def expand_batch(vertices):
@@ -125,6 +141,9 @@ class ExplorerStats:
 
     def _update_exploring(self):
         self._progress.update(self._task_exploring, total=self._vertices_explored + self._vertices_unexplored, completed=self._vertices_explored)
+
+    def _update_batches(self):
+        self._progress.update(self._task_batches, total=self._batches_scheduled, completed=self._batches_processed)
 
 
 class Explorer:
@@ -164,12 +183,13 @@ class Explorer:
         # We assume that everything in _pending_batches is actually being computed currently.
         # So _threads many batches are being computed (but presumably almost
         # done) and another _threads many are going to be computed shortly.
-        # We aim for there to be a buffer of another threads many batches that can be picked up by workers.
-        TARGET_BATCHES = 3 * self._threads
+        # We aim for there to be a buffer of another 3 threads many batches that can be picked up by workers.
+        TARGET_BATCHES = 5 * self._threads
         batch_count_from_TARGET_BATCHES = max(1, TARGET_BATCHES - len(self._pending_batches))
 
         # We do not want batches to become too big as this causes delays in
-        # network communication.
+        # network communication. But we also do not want them to be too small
+        # as there is an overhead in spawning a task.
         TARGET_BATCH_SIZE = 32
         batch_count_from_TARGET_BATCH_SIZE = max(1, ntasks // TARGET_BATCH_SIZE)
 
@@ -216,6 +236,8 @@ class Explorer:
                 completed, pending = await asyncio.wait(self._pending_batches[:self._threads], return_when=asyncio.FIRST_COMPLETED)
                 self._pending_batches = list(pending) + self._pending_batches[len(completed) + len(pending):]
 
+                completed = await self._pool.gather(completed)
+
                 with self._stats.consuming(completed) as (expand_batch, advance):
                     for batch in completed:
                         batch = batch.result()
@@ -226,6 +248,7 @@ class Explorer:
                                 self._register_node(neighbor)
                             self._graph[vt] = b"".join(md5(neighbor) for neighbor in neighbors)
                             advance()
+                        await asyncio.sleep(0)
 
             if not self._to_be_scheduled:
                 return
