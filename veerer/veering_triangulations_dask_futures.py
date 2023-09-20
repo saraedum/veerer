@@ -104,7 +104,7 @@ class ExplorerStats:
         self._batches_replicated += len(batches)
         self._batches_unreplicated -= len(batches)
         if self._batches_unreplicated == 0:
-            self._batches_unreplicated = 0
+            self._batches_replicated = 0
             self._progress.update(self._task_replicating, visible=False)
 
     @contextmanager
